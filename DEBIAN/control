@@ -1,0 +1,13 @@
+Package: storiq-raid-cli
+Version: 0.2.10
+Section: Intellique
+Priority: optional
+Architecture: all
+Depends: storiq-lib-raid(>=0.1), libperl6-form-perl, perl-base
+Recommends: storiq-cli-3ware, storiq-cli-adaptec, storiq-cli-areca, storiq-cli-xyratex
+Maintainer: Developpers Team <dev@intellique.com>
+Description: storiq-raid-cli
+ Intellique raid command line interface. This tool provides a full and standardized support for a large type of RAID controllers :
+ - 3ware
+ - Adaptec
+ - Xyratex

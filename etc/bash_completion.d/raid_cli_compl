@@ -1,0 +1,116 @@
+#
+# Raid completion for Intellique
+#
+have raid_cli &&
+_raid_cli() {
+    local commande controller cur prev special i lst_ctr
+
+    cur=$( _get_cword )
+    controller=${COMP_WORDS[1]}
+    commande=${COMP_WORDS[2]}
+    prev=${COMP_WORDS[COMP_CWORD-1]}
+
+    if [ -n "$commande" ]; then
+        case $commande in
+            createarray)
+                case $prev in
+                    --drives|--name|--stripesize)
+                        return 0;
+                    ;;
+                    --raidlevel)
+                        cur=$( echo $cur | tr '[A-Z]' '[a-z]' )
+                        COMPREPLY=( $( compgen -W 'jbod raid0 raid1 raid5 raid6 raid50 raid60' -- "$cur" ) )
+                        return 0;
+                    ;;
+                esac
+                cur=$( echo $cur | tr '[A-Z]' '[a-z]' )
+                COMPREPLY=( $( compgen -W '--drives --raidlevel --name --stripesize' -- "$cur" ) )
+                return 0;
+                ;;
+            createhotspare|deletehotspare)
+                case $prev in
+                    --drives)
+                        return 0;
+                    ;;
+                esac
+                cur=$( echo $cur | tr '[A-Z]' '[a-z]' )
+                COMPREPLY=( $( compgen -W '--drives' -- "$cur" ) )
+                return 0;
+            ;;
+            createlun)
+                case $prev in
+                    --arrays|--name|--size)
+                        return 0;
+                    ;;
+                esac
+                cur=$( echo $cur | tr '[A-Z]' '[a-z]' )
+                COMPREPLY=( $( compgen -W '--arrays --name --size' -- "$cur" ) )
+                return 0;
+            ;;
+            deletearray)
+                case $prev in
+                    --arrays)
+                        return 0;
+                    ;;
+                esac
+                cur=$( echo $cur | tr '[A-Z]' '[a-z]' )
+                COMPREPLY=( $( compgen -W '--arrays' -- "$cur" ) )
+                return 0;
+            ;;
+            deletelun)
+                case $prev in
+                    --luns)
+                        return 0;
+                    ;;
+                esac
+                cur=$( echo $cur | tr '[A-Z]' '[a-z]' )
+                COMPREPLY=( $( compgen -W '--luns' -- "$cur" ) )
+                return 0;
+            ;;
+            expandarray)
+                case $prev in
+                    --arrays|--drives|--raidlevel)
+                        return 0;
+                    ;;
+                esac
+                cur=$( echo $cur | tr '[A-Z]' '[a-z]' )
+                COMPREPLY=( $( compgen -W '--arrays --drives --raidlevel' -- "$cur" ) )
+                return 0;
+            ;;
+			verify)
+                case $prev in
+                    --arrays)
+                        return 0;
+                    ;;
+                esac
+                cur=$( echo $cur | tr '[A-Z]' '[a-z]' )
+                COMPREPLY=( $( compgen -W '--arrays' -- "$cur" ) )
+                return 0;
+			;;
+        esac
+    fi
+
+    if [ -n "$prev" ]; then
+        case $prev in
+            hardinfo|help|listcontrollers|rescan|softinfo)
+                return 0;
+            ;;
+        esac
+    fi
+
+    lst_ctr=$( raid_cli listcontrollers )
+
+    if [ $( echo $lst_ctr | tr ' ' '\n' | grep -cx -- "$prev" ) -gt 0 ]; then
+        cur=$( echo $cur | tr '[A-Z]' '[a-z]' )
+        COMPREPLY=( $( compgen -W "createarray createhotspare createlun deletearray deletehotspare deletelun expandarray rescan verify" -- $cur ) )
+        return 0;
+    fi
+
+    cur=$( echo $cur | tr '[A-Z]' '[a-z]' )
+    COMPREPLY=( $( compgen -W "hardinfo help listcontrollers softinfo $lst_ctr" -- $cur ))
+
+    return 0
+}
+
+[ -n "${have:-}" ] && complete -F _raid_cli $filenames raid_cli
+

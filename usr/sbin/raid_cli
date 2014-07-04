@@ -1,0 +1,800 @@
+#!/usr/bin/perl
+
+## ######### PROJECT NAME : ##########
+##
+## raid_cli
+##
+## ######### PROJECT DESCRIPTION : ###
+##
+## This file is raid_cli version 2 main executable script.
+##
+## ###################################
+##
+## Made by Boutonnet Alexandre
+## Login   <aboutonnet@intellique.com>
+##
+## Started on  Tue Feb 10 15:06:04 2009 Boutonnet Alexandre
+##
+##
+## ###################################
+##
+
+use strict;
+use warnings;
+
+# DEBUG.
+use Data::Dumper;
+
+use Perl6::Form;
+use Getopt::Long;
+
+# Lib_Raid for creation, etc, Rpc for display
+use Lib_Raid;
+use Lib_Raid_Rpc;
+use lib_raid_plugins::lib_raid_codes;
+
+my $RVERSION = "0.2.9";
+my $DEBUG    = '';
+
+# Shell Colors
+my $RED    = "[1;31m";
+my $YELLOW = "[1;33m";
+my $NORMAL = "[0;39m";
+
+# GLOBAL
+# format doesn't properly handle esc codes!
+my $TEMPLATES = {
+    'list_controllers' =>
+      " * {<{5}}   {'{8}}  {'{10}}  {<{11}}  {<{6}}  {<{6}}  {<{20}}",
+    'list_controllers_title' =>
+      "   {<{5}}   {'{8}}  {'{10}}  {<{11}}  {<{6}}  {<{6}}  {<{10}}",
+    'list_luns_title'  => "   {<{10}}      {<{30}}   {{10}>}   {<{36}}",
+    'list_luns_name'   => " * {<{5}}",
+    'list_luns_info'   => "   |-------------  {<{30}}   {{10}>}   {<{36}}",
+    'list_luns_arrays' => "   |               |----  {<{5}}",
+
+    'list_luns_soft_title' =>
+      "   {<{10}}      {<{5}}   {<{10}}             {{10}>}   {<{36}}",
+    'list_luns_soft_info' => "   |-------------  {<{30}} {{10}>}   {<{36}}",
+    'list_luns_soft_arrays' =>
+      "   |               |-----  {<{20}}   {{10}>}   {<{36}}",
+
+    'list_ctl_hard' => " * {<{5}}",
+    'list_array_hard' =>
+      "   |----  {<{10}}       {{10}>}    {<{8}}          {<{36}}",
+    'list_drive_array_hard' =>
+      "   |      |---- {<{9}}  {{10}>}    {<{15}}   {<{36}}",
+    'list_enclosure_hard' =>
+      "   |----  {<{4}}                           {<{15}}",
+    'list_drive_hard' => "   |----  {<{10}}       {{10}>}    {<{15}}   {<{36}}",
+    'simple_pipe'     => "   |",
+};
+
+my $ACTIONS = {
+    'createarray'    => 'create_array',
+    'deletearray'    => 'delete_array',
+    'createhotspare' => 'create_hotspare',
+    'deletehotspare' => 'delete_hotspare',
+    'expandarray'    => 'expand_array',
+    'rescan'         => 'rescan_controller',
+    'createlun'      => 'create_lun',
+    'deletelun'      => 'delete_lun',
+	'verify'		 => 'verify',
+};
+
+my $SECOND_CALL = {
+    'help'            => \&print_help,
+    'softinfo'        => \&print_soft_info,
+    'infosoft'        => \&print_soft_info,
+    'listcontrollers' => \&print_list_controllers,
+    'hardinfo'        => \&print_hard_info,
+    'infohard'        => \&print_hard_info,
+};
+
+# This function computes and prints the first
+# level screen (when no parameters are given to
+# the main program)
+sub first_level_call {
+    print_waiting_string();
+    my $hash_controllers = Lib_Raid_Rpc::get_all_info("verbose");
+    erase_waiting_string();
+
+    print " -- Controllers --\n";
+    print_formated_line(
+        'list_controllers_title', "Name",
+        "Vendor",                 "Model",
+        "BBU",                    "Spares",
+        "Arrays",                 "Status"
+    );
+    foreach my $ctl ( sort keys(%$hash_controllers) ) {
+        print_formated_line(
+            'list_controllers',
+            $ctl,
+            $hash_controllers->{$ctl}->{vendor},
+            $hash_controllers->{$ctl}->{model},
+            lib_raid_codes::get_bbu_state_string(
+                $hash_controllers->{$ctl}->{BBU}->{status}
+            ),
+            $hash_controllers->{$ctl}->{numberofspares},
+            $hash_controllers->{$ctl}->{numberofarrays},
+            color_line(
+                lib_raid_codes::get_state_color_value(
+                    $hash_controllers->{$ctl}->{status}
+                ),
+                lib_raid_codes::get_state_string(
+                    $hash_controllers->{$ctl}->{status}
+                )
+            )
+        );
+    }
+
+    print "\n\n -- Luns --\n";
+    print_formated_line( 'list_luns_title', "Controller", "Name", "Size",
+        "Status" );
+    foreach my $ctl ( sort keys(%$hash_controllers) ) {
+
+        # skip this controller if no luns
+        next
+          if ( scalar( keys %{ $hash_controllers->{$ctl}->{luns} } ) == 0 );
+
+        next if ( !defined( $hash_controllers->{$ctl}->{luns} ) );
+        print_formated_line( 'list_luns_name', $ctl );
+        foreach
+          my $lun ( sort keys( %{ $hash_controllers->{$ctl}->{luns} } ) )
+        {
+            print_formated_line(
+                'list_luns_info',
+                $lun,
+                _get_correct_size(
+                    $hash_controllers->{$ctl}->{luns}->{$lun}->{size}
+                ),
+                color_line(
+                    lib_raid_codes::get_state_color_value(
+                        $hash_controllers->{$ctl}->{luns}->{$lun}->{status}
+                    ),
+                    lib_raid_codes::get_state_string(
+                        $hash_controllers->{$ctl}->{luns}->{$lun}->{status}
+                    )
+                )
+            );
+        }
+        print "\n";
+    }
+
+    print "\n";
+}
+
+# This function prints the softinfo screen
+sub print_soft_info {
+    print_waiting_string();
+    my $hash_controllers = Lib_Raid_Rpc::get_all_info("verbose");
+    erase_waiting_string();
+
+    print " -- Luns --\n";
+    print_formated_line(
+        'list_luns_soft_title', "Controller",
+        "Name",                 "Array",
+        "Size",                 "Status"
+    );
+    foreach my $ctl ( sort keys(%$hash_controllers) ) {
+
+        # skip this controller if no luns
+        next
+          if ( scalar( keys %{ $hash_controllers->{$ctl}->{luns} } ) == 0 );
+
+        print_formated_line( 'list_luns_name', $ctl );
+        foreach
+          my $lun ( sort keys( %{ $hash_controllers->{$ctl}->{luns} } ) )
+        {
+            print_formated_line('simple_pipe');
+            print_formated_line(
+                'list_luns_soft_info',
+                $lun,
+                _get_correct_size(
+                    $hash_controllers->{$ctl}->{luns}->{$lun}->{size}
+                ),
+                color_line(
+                    lib_raid_codes::get_state_color_value(
+                        $hash_controllers->{$ctl}->{luns}->{$lun}->{status}
+                    ),
+                    lib_raid_codes::get_state_string(
+                        $hash_controllers->{$ctl}->{luns}->{$lun}->{status}
+                    )
+                )
+            );
+            foreach my $array (
+                @{ $hash_controllers->{$ctl}->{luns}->{$lun}->{arrays} } )
+            {
+                my $array_status = lib_raid_codes::get_state_string(
+                    $hash_controllers->{$ctl}->{arrays}->{$array}
+                      ->{status} );
+                $array_status =
+                    $array_status . " ("
+                  . $hash_controllers->{$ctl}->{arrays}->{$array}
+                  ->{progression}
+                  . " %)"
+                  if (
+                    defined(
+                        $hash_controllers->{$ctl}->{arrays}->{$array}
+                          ->{progression}
+                    )
+                  );
+
+                print_formated_line(
+                    'list_luns_soft_arrays',
+                    $array,
+                    _get_correct_size(
+                        $hash_controllers->{$ctl}->{arrays}->{$array}
+                          ->{size}
+                    ),
+                    color_line(
+                        lib_raid_codes::get_state_color_value(
+                            $hash_controllers->{$ctl}->{arrays}->{$array}
+                              ->{status}
+                        ),
+                        $array_status
+                    )
+                );
+            }
+        }
+        print "\n";
+    }
+
+    print "\n";
+}
+
+# This function prints the hardinfo screen
+sub print_hard_info {
+    print_waiting_string();
+    my $hash_controllers = Lib_Raid_Rpc::get_all_info("verbose");
+    erase_waiting_string();
+
+    #print Dumper $hash_controllers;
+
+    print " -- Controllers --\n";
+    print_formated_line(
+        'list_controllers_title', "Name",
+        "Vendor",                 "Model",
+        "BBU",                    "Spares",
+        "Arrays",                 "Status"
+    );
+    foreach my $ctl ( sort keys(%$hash_controllers) ) {
+        print_formated_line(
+            'list_controllers',
+            $ctl,
+            $hash_controllers->{$ctl}->{vendor},
+            $hash_controllers->{$ctl}->{model},
+            lib_raid_codes::get_bbu_state_string(
+                $hash_controllers->{$ctl}->{BBU}->{status}
+            ),
+            $hash_controllers->{$ctl}->{numberofspares},
+            $hash_controllers->{$ctl}->{numberofarrays},
+            color_line(
+                lib_raid_codes::get_state_color_value(
+                    $hash_controllers->{$ctl}->{status}
+                ),
+                lib_raid_codes::get_state_string(
+                    $hash_controllers->{$ctl}->{status}
+                )
+            )
+        );
+    }
+    print "\n";
+
+    foreach my $ctl ( sort keys(%$hash_controllers) ) {
+
+        # skip this controller if no arrays and no drives
+        next
+          if ( $hash_controllers->{$ctl}->{numberofarrays} == 0
+            and scalar(keys %{$hash_controllers->{$ctl}->{drives}}) == 0 );
+
+        print_formated_line( 'list_ctl_hard', $ctl );
+
+        # Arrays and drives
+        foreach
+          my $array ( sort keys( %{ $hash_controllers->{$ctl}->{arrays} } ) )
+        {
+            print_formated_line('simple_pipe');
+
+            my $array_status = lib_raid_codes::get_state_string(
+                $hash_controllers->{$ctl}->{arrays}->{$array}->{status} );
+            $array_status =
+                $array_status . " ("
+              . $hash_controllers->{$ctl}->{arrays}->{$array}->{progression}
+              . " %)"
+              if (
+                defined(
+                    $hash_controllers->{$ctl}->{arrays}->{$array}
+                      ->{progression}
+                )
+              );
+
+            print_formated_line(
+                'list_array_hard',
+                $array,
+                _get_correct_size(
+                    $hash_controllers->{$ctl}->{arrays}->{$array}->{size}
+                ),
+                lib_raid_codes::get_raid_string(
+                    $hash_controllers->{$ctl}->{arrays}->{$array}
+                      ->{raidtype}
+                ),
+                color_line(
+                    lib_raid_codes::get_state_color_value(
+                        $hash_controllers->{$ctl}->{arrays}->{$array}
+                          ->{status}
+                    ),
+                    $array_status
+                )
+            );
+
+            foreach my $drive (
+                sort {
+                         ( $a =~ /(\D)*\d*/ )[0] cmp( $b =~ /(\D)*\d*/ )[0]
+                      || ( $a =~ /[\D]*(\d*)/ )[0] <=> ( $b =~ /[\D]*(\d*)/ )[0]
+                } @{ $hash_controllers->{$ctl}->{arrays}->{$array}
+                      ->{drives} }
+              )
+            {
+                print_drive_line( 'list_drive_array_hard', $drive,
+                    $hash_controllers->{$ctl}->{drives}->{$drive} );
+
+                # delete $hash_controllers->{$ctl}->{drives}->{$drive};
+            }
+        }
+        _print_enclosures_and_drives_info( $hash_controllers, $ctl );
+        print "\n";
+    }
+
+}
+
+# This function prints the controller list
+sub print_list_controllers {
+    my $ctl_list = Lib_Raid_Rpc::get_all_controllers_list();
+
+    if ( !scalar(@$ctl_list) ) {
+        "No controller Found\n";
+    } else {
+        foreach my $ctl (@$ctl_list) {
+            print $ctl. "\n";
+        }
+    }
+}
+
+# This function looks for a known parameter (second level)
+# and call the right action
+sub second_level_call {
+    my $param = shift;
+
+    if ( exists( $SECOND_CALL->{$param} ) ) {
+        $SECOND_CALL->{$param}->();
+    } else {
+        print_help();
+    }
+}
+
+sub print_help {
+    print "
+raid_cli version $RVERSION
+
+  First level :
+  Usage : raid_cli <argument>
+   - hardinfo : print hardware informations (arrays, drives, enclosures, ...)
+   - help : this help
+   - listcontrollers : print the controllers list
+   - softinfo : print logical units information
+
+  Example : raid_cli hardinfo
+
+
+  Second level :
+  Usage : raid_cli <controller> <action> <options ... >
+   - createarray --drives <drives list> --raidlevel <raidlevel>
+                 (--name <name> --stripesize <size>)
+   - deletearray --arrays <arrays list>
+   - expandarray --arrays <array> --raidlevel <raidlevel>
+   - verify --arrays <array>
+
+   - createhotspare --drives <drives list>
+   - deletehotspare --drives <drives list>
+                 (--drives <drives list>)
+
+   - createlun --arrays <array list>
+               (--name <name> --size <size>)
+   - deletelun --luns <lun list>
+
+   drives list can be :
+    - \"d0 d1\" (0 and 1)
+    - \"d1:3\" (1 and 3)
+    - \"d1-10\" (1 to 10)
+   raidlevel can be :
+    - jbod
+    - raid0
+    - raid1
+    - raid5
+    - raid6
+	... depending upon the controller type.
+	
+   name is a name string (ex : backup)
+   stripesize is a size in KiB
+   size is in MiB, G and T prefixes may be used (ex : 1.2G = 1228.8 MB)
+
+   Example : raid_cli ada1 createarray --drives d1:3 d5-10 --raidlevel raid5
+
+   See man raid_cli for more information.
+";
+}
+
+# Debug fonction
+sub debug {
+    my $var = shift;
+    if ($DEBUG) {
+        my @caller = caller;
+        print "# DEBUG START #\n";
+        print "called from ", join( ":", @caller ), "\n";
+        print Dumper $var;
+        print "# DEBUG END #\n";
+    }
+}
+
+####### SECOND LEVEL FUNCTIONS
+sub _print_enclosures_and_drives_info {
+    my ( $hash_controllers, $ctl ) = @_;
+
+    # Enclosures...
+    if ( exists( $hash_controllers->{$ctl}->{enclosures} ) ) {
+        foreach my $enc (
+            sort keys( %{ $hash_controllers->{$ctl}->{enclosures} } ) )
+        {
+            print_formated_line('simple_pipe');
+            print_formated_line( 'list_enclosure_hard', $enc,
+                $hash_controllers->{$ctl}->{enclosures}->{$enc}->{model} );
+
+            foreach my $drive (
+                sort {
+                         ( $a =~ /(\D)*\d*/ )[0] cmp( $b =~ /(\D)*\d*/ )[0]
+                      || ( $a =~ /[\D]*(\d*)/ )[0] <=> ( $b =~ /[\D]*(\d*)/ )[0]
+                }
+                keys( %{ $hash_controllers->{$ctl}->{drives} } )
+              )
+            {
+                next
+                  if (
+                    !exists(
+                        $hash_controllers->{$ctl}->{drives}->{$drive}
+                          ->{enclosurenumber}
+                    )
+                    or  'e' . $hash_controllers->{$ctl}->{drives}->{$drive}
+            ->{enclosurenumber} ne $enc
+
+                  );
+
+                if ( $hash_controllers->{$ctl}->{drives}->{$drive}
+                    ->{inarray} ==
+                    lib_raid_codes::get_drive_inarray_code("unused") )
+                {
+                    print_drive_line( 'list_drive_array_hard', $drive,
+                        $hash_controllers->{$ctl}->{drives}->{$drive}, 1 );
+                } elsif ( $hash_controllers->{$ctl}->{drives}->{$drive}
+                    ->{inarray} ==
+                    lib_raid_codes::get_drive_inarray_code("hotspare") )
+                {
+                    print_hotspare_line( 'list_drive_array_hard', $drive,
+                        $hash_controllers->{$ctl}->{drives}->{$drive}, 1 );
+                }
+
+            }
+        }
+    }
+
+    print_formated_line('simple_pipe');
+
+    # Spares...
+    my $code = lib_raid_codes::get_drive_inarray_code("hotspare");
+    foreach
+      my $drive ( sort keys( %{ $hash_controllers->{$ctl}->{drives} } ) )
+    {
+        next
+          if ( $hash_controllers->{$ctl}->{drives}->{$drive}->{inarray} =~
+            m/[a-zA-Z]/ );    # skip lvm pvs
+        next
+          if ( $hash_controllers->{$ctl}->{drives}->{$drive}->{inarray} !=
+            $code );
+        next
+          if (
+            exists(
+                $hash_controllers->{$ctl}->{drives}->{$drive}
+                  ->{enclosurenumber}
+            )
+            and $hash_controllers->{$ctl}->{drives}->{$drive}
+            ->{enclosurenumber} > -1
+          );
+
+        print_hotspare_line( 'list_drive_hard', $drive,
+            $hash_controllers->{$ctl}->{drives}->{$drive} );
+    }
+
+    # unused drive...
+    $code = lib_raid_codes::get_drive_inarray_code("unused");
+    my $unknown = lib_raid_codes::get_drive_inarray_code("unknown");
+    my $orphan  = lib_raid_codes::get_drive_inarray_code("orphan");
+    foreach my $drive (
+        sort {
+                 ( $a =~ /(\D)*\d*/ )[0] cmp( $b =~ /(\D)*\d*/ )[0]
+              || ( $a =~ /[\D]*(\d*)/ )[0] <=> ( $b =~ /[\D]*(\d*)/ )[0]
+        }
+        keys( %{ $hash_controllers->{$ctl}->{drives} } )
+      )
+    {
+        next
+          if ( $hash_controllers->{$ctl}->{drives}->{$drive}->{inarray} =~
+            m/[a-zA-Z]/ );    # No lvm
+        next
+          if ( $hash_controllers->{$ctl}->{drives}->{$drive}->{inarray} !=
+               $code
+            && $hash_controllers->{$ctl}->{drives}->{$drive}->{inarray} !=
+            $unknown
+            && $hash_controllers->{$ctl}->{drives}->{$drive}->{inarray} !=
+            $orphan );
+
+        next
+          if (
+            exists(
+                $hash_controllers->{$ctl}->{drives}->{$drive}
+                  ->{enclosurenumber}
+            )
+            and $hash_controllers->{$ctl}->{drives}->{$drive}
+            ->{enclosurenumber} > -1
+          );
+
+        print_drive_line( 'list_drive_hard', $drive,
+            $hash_controllers->{$ctl}->{drives}->{$drive} );
+    }
+}
+
+sub _get_correct_size {
+    my $size = shift;
+
+    return $size if ( $size !~ m/[\d\.]/ );
+
+    if ( $size > 1000000 ) {
+        $size = sprintf( "%.2f", $size / ( 1024 * 1024 ) ) . " TB";
+    } elsif ( $size > 1000 ) {
+        $size = sprintf( "%.2f", $size / 1024 ) . " GB";
+    } else {
+        $size = sprintf( "%.2f", $size ) . " MB";
+    }
+    return $size;
+}
+
+# this function takes a tab in parameter, parse it
+# and reformat command line entries ex:
+# d1-5 => d1, d2, d3, d4, d5
+sub _reformat_command_line {
+    my $tab = shift;
+
+    my $return_tab = ();
+    foreach my $element ( @{$tab} ) {
+
+        # I have an interval
+        if ( $element =~ m/-/ ) {
+            my ($letter) = ( $element =~ m/(\D)\d+-/ );
+            my ( $minor, $major ) = ( $element =~ m/(\d+)-(\d+)/ );
+
+            if ( !defined($letter) || !defined($minor) || !defined($major) ) {
+                push( @{$return_tab}, $element );
+            } else {
+                foreach ( $minor .. $major ) {
+                    push( @{$return_tab}, $letter . $_ );
+                }
+            }
+        }
+
+        # I have a list (:)
+        elsif ( $element =~ m/:/ ) {
+            my ($letter) = ( $element =~ m/(\D)\d+:/ );
+            if ( !defined($letter) ) {
+                push( @{$return_tab}, $element );
+                next;
+            }
+            my @split_tab = split( /:/, $element );
+            foreach (@split_tab) {
+                if ( $_ =~ m/$letter/ ) {
+                    push( @{$return_tab}, $_ );
+                } else {
+                    push( @{$return_tab}, $letter . $_ );
+                }
+            }
+
+        }
+
+        # I have a list (,)
+        elsif ( $element =~ m/,/ ) {
+            my ($letter) = ( $element =~ m/(\D)\d+,/ );
+            if ( !defined($letter) ) {
+                push( @{$return_tab}, $element );
+                next;
+            }
+            my @split_tab = split( /,/, $element );
+            foreach (@split_tab) {
+                if ( $_ =~ m/$letter/ ) {
+                    push( @{$return_tab}, $_ );
+                } else {
+                    push( @{$return_tab}, $letter . $_ );
+                }
+            }
+        } else {
+            push( @{$return_tab}, $element );
+        }
+    }
+    return $return_tab;
+}
+
+# This function convert the string size
+# in MB
+sub _convert_size {
+    my $string_size = shift;
+
+    # for dumb users
+    $string_size =~ s/,/\./;
+
+    if ( $string_size =~ m/[\d\.]+G/ ) {
+        my ($size) = ( $string_size =~ m/([\d\.]+)G/ );
+        return ( $size * 1024 );
+    } elsif ( $string_size =~ m/[\d\.]+T/ ) {
+        my ($size) = ( $string_size =~ m/([\d\.]+)T/ );
+        return ( $size * 1024 * 1024 );
+    }
+
+    my ($size) = ( $string_size =~ m/([\d\.]+)/ );
+    return ($size);
+}
+
+####### FORMAT FUNCTIONS
+sub print_formated_line {
+    my $template_name = shift;
+    my $text = form $TEMPLATES->{$template_name}, @_;
+    print $text;
+    print $NORMAL;
+}
+
+sub print_waiting_string {
+    print "Fetching Informations, please wait...";
+}
+
+sub erase_waiting_string {
+    print "\r                                     \r";
+}
+
+sub color_line {
+    my ( $color_code, $msg ) = @_;
+
+    return $msg if ( !$color_code );
+    return $YELLOW . $msg if ( $color_code == 1 );
+    return $RED . $msg;
+}
+
+sub print_drive_line {
+    my ( $line_to_use, $drive, $drive_hash, $flag_enclosure ) = @_;
+
+    my $model = $drive_hash->{model};
+    $model = "N/A" if ( !defined( $drive_hash->{model} ) );
+
+    my $size = $drive_hash->{size};
+    $size = "N/A" if ( !defined( $drive_hash->{size} ) );
+
+    if (  !defined($flag_enclosure)
+        && exists( $drive_hash->{enclosurenumber} )
+        && $drive_hash->{enclosurenumber} > -1 )
+    {
+        $drive = $drive . " (e" . $drive_hash->{enclosurenumber} . ")";
+    }
+
+    print_formated_line(
+        $line_to_use,
+        $drive,
+        _get_correct_size($size),
+        $model,
+        color_line(
+            lib_raid_codes::get_drive_state_color_value(
+                $drive_hash->{status}
+            ),
+            lib_raid_codes::get_drive_state_string( $drive_hash->{status} )
+        )
+    );
+}
+
+sub print_hotspare_line {
+    my ( $line_to_use, $drive, $drive_hash, $flag_enclosure ) = @_;
+
+    # renaming drive..
+    $drive =~ s/d/h/;
+
+    my $model = $drive_hash->{model};
+    $model = "N/A" if ( !defined( $drive_hash->{model} ) );
+
+    my $size = $drive_hash->{size};
+    $size = "N/A" if ( !defined( $drive_hash->{size} ) );
+
+    if (  !defined($flag_enclosure)
+        && exists( $drive_hash->{enclosurenumber} )
+        && $drive_hash->{enclosurenumber} > -1 )
+    {
+        $drive = $drive . " (e" . $drive_hash->{enclosurenumber} . ")";
+    }
+
+    print_formated_line(
+        $line_to_use,
+        $drive,
+        _get_correct_size($size),
+        $model,
+        "SPARE ("
+          . color_line(
+            lib_raid_codes::get_drive_state_color_value(
+                $drive_hash->{status}
+            ),
+            lib_raid_codes::get_drive_state_string( $drive_hash->{status} )
+          )
+          . ")"
+    );
+}
+
+####### WE START HERE
+
+if ( !scalar(@ARGV) ) {
+    first_level_call();
+} elsif ( scalar(@ARGV) == 1 ) {
+    second_level_call(@ARGV);
+} else {
+    my $ctl    = $ARGV[0];
+    my $action = $ARGV[1];
+    my $function;
+
+    if ( !exists( $ACTIONS->{$action} ) ) {
+        print "Error : Unknown Action !\n";
+        print_help();
+        exit(1);
+    } else {
+        $function = $ACTIONS->{$action};
+    }
+
+    my $opt_hash = {};
+
+    my $result = GetOptions(
+        'stripesize=i' => \$opt_hash->{stripesize},
+        'raidlevel=s'  => \$opt_hash->{raidlevel},
+        'name=s'       => \$opt_hash->{name},
+        'drives=s{,}'  => \@{ $opt_hash->{drives} },
+        'arrays=s{,}'  => \@{ $opt_hash->{arrays} },
+        'luns=s{,}'    => \@{ $opt_hash->{luns} },
+        'size=s'       => \$opt_hash->{size},
+        'debug|d'      => \$DEBUG,
+    );
+
+    # reformat my drives list (d1-5 -> d1 d2 d3 d4 d5)
+    $opt_hash->{drives} = _reformat_command_line( $opt_hash->{drives} )
+      if ( scalar( @{ $opt_hash->{drives} } ) );
+
+    # reformat my arrays list (d1-5 -> d1 d2 d3 d4 d5)
+    $opt_hash->{arrays} = _reformat_command_line( $opt_hash->{arrays} )
+      if ( scalar( @{ $opt_hash->{arrays} } ) );
+
+    # convert size in MB
+    $opt_hash->{size} = _convert_size( $opt_hash->{size} )
+      if ( $opt_hash->{size} );
+
+    # translation of the raid level in raid code
+    $opt_hash->{raidlevel} =
+      lib_raid_codes::get_raid_level_code( $opt_hash->{raidlevel} )
+      if ( defined( $opt_hash->{raidlevel} ) );
+
+    #     print Dumper $opt_hash;
+
+    my ( $err, $ret_msg ) = Lib_Raid::call_action( $ctl, $function, $opt_hash );
+
+    print $ret_msg . "\n" if $ret_msg;
+
+    debug($opt_hash);
+}
+
+exit 0;
