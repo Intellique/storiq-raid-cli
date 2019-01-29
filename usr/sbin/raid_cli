@@ -31,9 +31,9 @@ use Getopt::Long;
 # Lib_Raid for creation, etc, Rpc for display
 use Lib_Raid;
 use Lib_Raid_Rpc;
-use lib_raid_plugins::lib_raid_codes;
+use Lib_Raid::lib_raid_codes;
 
-my $RVERSION = "0.2.9";
+my $RVERSION = "0.2.11";
 my $DEBUG    = '';
 
 # Shell Colors
